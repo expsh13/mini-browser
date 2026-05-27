@@ -10,6 +10,12 @@ struct Url {
     path: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct Config {
+    raw: bool,
+    url: String,
+}
+
 #[derive(Debug)]
 enum BrowserError {
     InvalidUrl(String),
@@ -39,18 +45,43 @@ fn main() {
 }
 
 fn run() -> Result<(), BrowserError> {
-    let input = env::args().nth(1).ok_or_else(|| {
-        BrowserError::InvalidUrl("usage: mini-browser http://example.org/".into())
-    })?;
+    let config = parse_args(env::args().skip(1))?;
 
-    let url = parse_url(&input)?;
+    let url = parse_url(&config.url)?;
     let response = fetch(&url)?;
-    let body = response_body(&response);
-    let text = html_to_text(body);
 
-    println!("{text}");
+    if config.raw {
+        print!("{response}");
+    } else {
+        let body = response_body(&response);
+        let text = html_to_text(body);
+        println!("{text}");
+    }
 
     Ok(())
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Config, BrowserError> {
+    let mut raw = false;
+    let mut url = None;
+
+    for arg in args {
+        if arg == "--raw" {
+            raw = true;
+        } else if url.is_none() {
+            url = Some(arg);
+        } else {
+            return Err(BrowserError::InvalidUrl(usage()));
+        }
+    }
+
+    let url = url.ok_or_else(|| BrowserError::InvalidUrl(usage()))?;
+
+    Ok(Config { raw, url })
+}
+
+fn usage() -> String {
+    "usage: mini-browser [--raw] http://example.org/".into()
 }
 
 fn parse_url(input: &str) -> Result<Url, BrowserError> {
@@ -127,6 +158,32 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::thread;
+
+    #[test]
+    fn parses_url_argument() {
+        let config = parse_args(["http://example.org/".to_string()]).unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                raw: false,
+                url: "http://example.org/".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_raw_option() {
+        let config = parse_args(["--raw".to_string(), "http://example.org/".to_string()]).unwrap();
+
+        assert_eq!(
+            config,
+            Config {
+                raw: true,
+                url: "http://example.org/".into(),
+            }
+        );
+    }
 
     #[test]
     fn parses_http_url() {
