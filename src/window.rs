@@ -1,18 +1,14 @@
 use crate::error::BrowserError;
+use crate::layout::{
+    CHAR_HEIGHT, CHAR_WIDTH, FONT_SCALE, LayoutLine, MARGIN, WINDOW_HEIGHT, WINDOW_WIDTH,
+};
 use font8x8::UnicodeFonts;
 use minifb::{Key, Window, WindowOptions};
 
-const WINDOW_WIDTH: usize = 800;
-const WINDOW_HEIGHT: usize = 600;
 const BACKGROUND: u32 = 0x00fffcf7;
 const TEXT: u32 = 0x001f2937;
-const MARGIN: usize = 20;
-const FONT_SCALE: usize = 2;
-const CHAR_WIDTH: usize = 8 * FONT_SCALE;
-const CHAR_HEIGHT: usize = 8 * FONT_SCALE;
-const LINE_HEIGHT: usize = CHAR_HEIGHT + 6;
 
-pub fn show_window(text: &str) -> Result<(), BrowserError> {
+pub fn show_window(lines: &[LayoutLine]) -> Result<(), BrowserError> {
     let mut window = Window::new(
         "mini-browser",
         WINDOW_WIDTH,
@@ -21,7 +17,7 @@ pub fn show_window(text: &str) -> Result<(), BrowserError> {
     )?;
     let mut buffer = vec![BACKGROUND; WINDOW_WIDTH * WINDOW_HEIGHT];
 
-    draw_text(&mut buffer, text);
+    draw_lines(&mut buffer, lines);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         window.update_with_buffer(&buffer, WINDOW_WIDTH, WINDOW_HEIGHT)?;
@@ -30,24 +26,18 @@ pub fn show_window(text: &str) -> Result<(), BrowserError> {
     Ok(())
 }
 
-fn draw_text(buffer: &mut [u32], text: &str) {
-    let max_x = WINDOW_WIDTH.saturating_sub(MARGIN + CHAR_WIDTH);
+fn draw_lines(buffer: &mut [u32], lines: &[LayoutLine]) {
     let max_y = WINDOW_HEIGHT.saturating_sub(MARGIN + CHAR_HEIGHT);
-    let mut x = MARGIN;
-    let mut y = MARGIN;
 
-    for ch in text.chars() {
-        if ch == '\n' || x > max_x {
-            x = MARGIN;
-            y += LINE_HEIGHT;
+    for line in lines {
+        if line.y > max_y {
+            continue;
         }
 
-        if y > max_y {
-            break;
-        }
+        let mut x = MARGIN;
 
-        if ch != '\n' {
-            draw_char(buffer, x, y, ch);
+        for ch in line.text.chars() {
+            draw_char(buffer, x, line.y, ch);
             x += CHAR_WIDTH;
         }
     }

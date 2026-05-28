@@ -1,12 +1,14 @@
 mod error;
 mod html;
 mod http;
+mod layout;
 mod url;
 mod window;
 
 use crate::error::BrowserError;
 use crate::html::html_to_text;
 use crate::http::{fetch, response_body};
+use crate::layout::layout_text;
 use crate::url::parse_url;
 use crate::window::show_window;
 use std::env;
@@ -35,7 +37,8 @@ fn run() -> Result<(), BrowserError> {
     } else {
         let body = response_body(&response);
         let text = html_to_text(body);
-        show_window(&text)?;
+        let lines = layout_text(&text);
+        show_window(&lines)?;
     }
 
     Ok(())
