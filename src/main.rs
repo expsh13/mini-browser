@@ -6,9 +6,9 @@ mod url;
 mod window;
 
 use crate::error::BrowserError;
-use crate::html::html_to_text;
+use crate::html::html_to_styled_text;
 use crate::http::{fetch, response_body};
-use crate::layout::layout_text;
+use crate::layout::layout_styled_text;
 use crate::url::parse_url;
 use crate::window::show_window;
 use std::env;
@@ -36,9 +36,9 @@ fn run() -> Result<(), BrowserError> {
         print!("{response}");
     } else {
         let body = response_body(&response);
-        let text = html_to_text(body);
-        let lines = layout_text(&text);
-        show_window(&lines)?;
+        let text = html_to_styled_text(body);
+        let runs = layout_styled_text(&text);
+        show_window(&runs)?;
     }
 
     Ok(())

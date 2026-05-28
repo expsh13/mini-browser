@@ -17,9 +17,21 @@ pub struct Attribute {
     pub value: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyledText {
+    pub text: String,
+    pub color: u32,
+}
+
+pub const DEFAULT_COLOR: u32 = 0x001f2937;
+
 pub fn html_to_text(html: &str) -> String {
+    styled_text_to_string(&html_to_styled_text(html))
+}
+
+pub fn html_to_styled_text(html: &str) -> Vec<StyledText> {
     let dom = parse_html(html);
-    dom_to_text(&dom)
+    dom_to_styled_text(&dom)
 }
 
 pub fn parse_html(html: &str) -> Node {
@@ -33,38 +45,82 @@ pub fn parse_html(html: &str) -> Node {
     })
 }
 
-pub fn dom_to_text(node: &Node) -> String {
-    let mut text = String::new();
-    collect_text(node, &mut text);
-    normalize_text(&text)
+pub fn dom_to_styled_text(node: &Node) -> Vec<StyledText> {
+    let mut pieces = Vec::new();
+    collect_styled_text(node, DEFAULT_COLOR, &mut pieces);
+    normalize_styled_text(&pieces)
 }
 
-fn collect_text(node: &Node, text: &mut String) {
+fn collect_styled_text(node: &Node, current_color: u32, pieces: &mut Vec<StyledText>) {
     match node {
-        Node::Text(content) => text.push_str(content),
+        Node::Text(content) => push_piece(pieces, content, current_color),
         Node::Element(element) => match element.tag.as_str() {
-            "br" => text.push('\n'),
+            "br" => push_piece(pieces, "\n", current_color),
             "p" | "h1" => {
-                push_block_break(text);
-                collect_children(&element.children, text);
-                push_block_break(text);
+                let color = style_color(element).unwrap_or(current_color);
+                push_piece(pieces, "\n\n", color);
+                collect_styled_children(&element.children, color, pieces);
+                push_piece(pieces, "\n\n", color);
             }
-            _ => collect_children(&element.children, text),
+            _ => {
+                let color = style_color(element).unwrap_or(current_color);
+                collect_styled_children(&element.children, color, pieces);
+            }
         },
     }
 }
 
-fn collect_children(children: &[Node], text: &mut String) {
+fn collect_styled_children(children: &[Node], color: u32, pieces: &mut Vec<StyledText>) {
     for child in children {
-        collect_text(child, text);
+        collect_styled_text(child, color, pieces);
     }
 }
 
-fn push_block_break(text: &mut String) {
-    if !text.ends_with('\n') {
-        text.push('\n');
+fn push_piece(pieces: &mut Vec<StyledText>, text: &str, color: u32) {
+    if text.is_empty() {
+        return;
     }
-    text.push('\n');
+
+    if let Some(last) = pieces.last_mut()
+        && last.color == color
+    {
+        last.text.push_str(text);
+        return;
+    }
+
+    pieces.push(StyledText {
+        text: text.into(),
+        color,
+    });
+}
+
+fn style_color(element: &ElementNode) -> Option<u32> {
+    let style = element
+        .attributes
+        .iter()
+        .find(|attr| attr.name == "style")?;
+
+    style.value.split(';').find_map(|declaration| {
+        let (name, value) = declaration.split_once(':')?;
+
+        if name.trim().eq_ignore_ascii_case("color") {
+            parse_color(value.trim())
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_color(input: &str) -> Option<u32> {
+    match input.to_ascii_lowercase().as_str() {
+        "black" => Some(0x00111111),
+        "blue" => Some(0x002563eb),
+        "green" => Some(0x0016a34a),
+        "red" => Some(0x00dc2626),
+        "white" => Some(0x00ffffff),
+        hex if hex.starts_with('#') && hex.len() == 7 => u32::from_str_radix(&hex[1..], 16).ok(),
+        _ => None,
+    }
 }
 
 struct Parser<'a> {
@@ -157,48 +213,106 @@ impl<'a> Parser<'a> {
 }
 
 fn parse_tag(input: &str) -> (String, Vec<Attribute>) {
-    let mut parts = input.trim().split_whitespace();
-    let tag = parts.next().unwrap_or("").to_ascii_lowercase();
-    let attributes = parts.filter_map(parse_attribute).collect();
+    let input = input.trim();
+    let tag_end = input.find(char::is_whitespace).unwrap_or(input.len());
+    let tag = input[..tag_end].to_ascii_lowercase();
+    let attributes = parse_attributes(&input[tag_end..]);
 
     (tag, attributes)
 }
 
-fn parse_attribute(input: &str) -> Option<Attribute> {
-    let (name, value) = input.split_once('=')?;
-    let value = value.trim_matches('"').trim_matches('\'').to_string();
+fn parse_attributes(mut input: &str) -> Vec<Attribute> {
+    let mut attributes = Vec::new();
 
-    Some(Attribute {
-        name: name.to_ascii_lowercase(),
-        value,
-    })
+    loop {
+        input = input.trim_start();
+
+        if input.is_empty() {
+            break;
+        }
+
+        let Some(eq_index) = input.find('=') else {
+            break;
+        };
+        let name = input[..eq_index].trim().to_ascii_lowercase();
+        input = input[eq_index + 1..].trim_start();
+
+        let Some(first_char) = input.chars().next() else {
+            break;
+        };
+
+        let (value, rest) = if first_char == '"' || first_char == '\'' {
+            let quote = first_char;
+            input = &input[quote.len_utf8()..];
+
+            match input.find(quote) {
+                Some(end_index) => (input[..end_index].to_string(), &input[end_index + 1..]),
+                None => (input.to_string(), ""),
+            }
+        } else {
+            let end_index = input.find(char::is_whitespace).unwrap_or(input.len());
+            (input[..end_index].to_string(), &input[end_index..])
+        };
+
+        if !name.is_empty() {
+            attributes.push(Attribute { name, value });
+        }
+
+        input = rest;
+    }
+
+    attributes
 }
 
-fn normalize_text(text: &str) -> String {
-    let mut normalized = String::new();
+fn normalize_styled_text(pieces: &[StyledText]) -> Vec<StyledText> {
+    let mut chars = Vec::new();
     let mut previous_was_space = false;
     let mut newline_count = 0;
 
-    for char in text.chars() {
-        if char == '\n' {
-            if newline_count < 2 {
-                normalized.push('\n');
+    for piece in pieces {
+        for char in piece.text.chars() {
+            if char == '\n' {
+                if newline_count < 2 {
+                    chars.push((char, piece.color));
+                }
+                previous_was_space = false;
+                newline_count += 1;
+            } else if char.is_whitespace() {
+                if !previous_was_space && newline_count == 0 {
+                    chars.push((' ', piece.color));
+                }
+                previous_was_space = true;
+            } else {
+                chars.push((char, piece.color));
+                previous_was_space = false;
+                newline_count = 0;
             }
-            previous_was_space = false;
-            newline_count += 1;
-        } else if char.is_whitespace() {
-            if !previous_was_space && newline_count == 0 {
-                normalized.push(' ');
-            }
-            previous_was_space = true;
-        } else {
-            normalized.push(char);
-            previous_was_space = false;
-            newline_count = 0;
         }
     }
 
-    normalized.trim().to_string()
+    while chars.first().is_some_and(|(char, _)| char.is_whitespace()) {
+        chars.remove(0);
+    }
+
+    while chars.last().is_some_and(|(char, _)| char.is_whitespace()) {
+        chars.pop();
+    }
+
+    let mut normalized = Vec::new();
+
+    for (char, color) in chars {
+        let text = char.to_string();
+        push_piece(&mut normalized, &text, color);
+    }
+
+    normalized
+}
+
+fn styled_text_to_string(pieces: &[StyledText]) -> String {
+    pieces
+        .iter()
+        .map(|piece| piece.text.as_str())
+        .collect::<String>()
 }
 
 #[cfg(test)]
@@ -233,7 +347,7 @@ mod tests {
 
     #[test]
     fn parses_attributes() {
-        let dom = parse_html(r#"<p style="color:red">Hello</p>"#);
+        let dom = parse_html(r#"<p style="color: red">Hello</p>"#);
 
         assert_eq!(
             dom,
@@ -244,7 +358,7 @@ mod tests {
                     tag: "p".into(),
                     attributes: vec![Attribute {
                         name: "style".into(),
-                        value: "color:red".into(),
+                        value: "color: red".into(),
                     }],
                     children: vec![Node::Text("Hello".into())],
                 })],
@@ -257,6 +371,38 @@ mod tests {
         let html = "<html><body><h1>Hello</h1><p>mini browser</p></body></html>";
 
         assert_eq!(html_to_text(html), "Hello\n\nmini browser");
+    }
+
+    #[test]
+    fn extracts_styled_text_from_style_attribute() {
+        let html = r#"<p>Hello <span style="color: red">red</span></p>"#;
+
+        assert_eq!(
+            html_to_styled_text(html),
+            vec![
+                StyledText {
+                    text: "Hello ".into(),
+                    color: DEFAULT_COLOR,
+                },
+                StyledText {
+                    text: "red".into(),
+                    color: 0x00dc2626,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extracts_hex_color_from_style_attribute() {
+        let html = r#"<p style="color: #2563eb">blue</p>"#;
+
+        assert_eq!(
+            html_to_styled_text(html),
+            vec![StyledText {
+                text: "blue".into(),
+                color: 0x002563eb,
+            }]
+        );
     }
 
     #[test]
