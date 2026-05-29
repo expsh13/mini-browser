@@ -1,3 +1,5 @@
+use crate::css::{ComputedStyle, compute_style, parse_inline_style};
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Node {
     Element(ElementNode),
@@ -23,8 +25,6 @@ pub struct StyledText {
     pub color: u32,
 }
 
-pub const DEFAULT_COLOR: u32 = 0x001f2937;
-
 pub fn html_to_text(html: &str) -> String {
     styled_text_to_string(&html_to_styled_text(html))
 }
@@ -47,32 +47,32 @@ pub fn parse_html(html: &str) -> Node {
 
 pub fn dom_to_styled_text(node: &Node) -> Vec<StyledText> {
     let mut pieces = Vec::new();
-    collect_styled_text(node, DEFAULT_COLOR, &mut pieces);
+    collect_styled_text(node, ComputedStyle::default(), &mut pieces);
     normalize_styled_text(&pieces)
 }
 
-fn collect_styled_text(node: &Node, current_color: u32, pieces: &mut Vec<StyledText>) {
+fn collect_styled_text(node: &Node, parent_style: ComputedStyle, pieces: &mut Vec<StyledText>) {
     match node {
-        Node::Text(content) => push_piece(pieces, content, current_color),
+        Node::Text(content) => push_piece(pieces, content, parent_style.color),
         Node::Element(element) => match element.tag.as_str() {
-            "br" => push_piece(pieces, "\n", current_color),
+            "br" => push_piece(pieces, "\n", parent_style.color),
             "p" | "h1" => {
-                let color = style_color(element).unwrap_or(current_color);
-                push_piece(pieces, "\n\n", color);
-                collect_styled_children(&element.children, color, pieces);
-                push_piece(pieces, "\n\n", color);
+                let style = computed_style(element, parent_style);
+                push_piece(pieces, "\n\n", style.color);
+                collect_styled_children(&element.children, style, pieces);
+                push_piece(pieces, "\n\n", style.color);
             }
             _ => {
-                let color = style_color(element).unwrap_or(current_color);
-                collect_styled_children(&element.children, color, pieces);
+                let style = computed_style(element, parent_style);
+                collect_styled_children(&element.children, style, pieces);
             }
         },
     }
 }
 
-fn collect_styled_children(children: &[Node], color: u32, pieces: &mut Vec<StyledText>) {
+fn collect_styled_children(children: &[Node], style: ComputedStyle, pieces: &mut Vec<StyledText>) {
     for child in children {
-        collect_styled_text(child, color, pieces);
+        collect_styled_text(child, style, pieces);
     }
 }
 
@@ -94,33 +94,14 @@ fn push_piece(pieces: &mut Vec<StyledText>, text: &str, color: u32) {
     });
 }
 
-fn style_color(element: &ElementNode) -> Option<u32> {
-    let style = element
+fn computed_style(element: &ElementNode, parent_style: ComputedStyle) -> ComputedStyle {
+    let inline_style = element
         .attributes
         .iter()
-        .find(|attr| attr.name == "style")?;
+        .find(|attr| attr.name == "style")
+        .map(|attr| parse_inline_style(&attr.value));
 
-    style.value.split(';').find_map(|declaration| {
-        let (name, value) = declaration.split_once(':')?;
-
-        if name.trim().eq_ignore_ascii_case("color") {
-            parse_color(value.trim())
-        } else {
-            None
-        }
-    })
-}
-
-fn parse_color(input: &str) -> Option<u32> {
-    match input.to_ascii_lowercase().as_str() {
-        "black" => Some(0x00111111),
-        "blue" => Some(0x002563eb),
-        "green" => Some(0x0016a34a),
-        "red" => Some(0x00dc2626),
-        "white" => Some(0x00ffffff),
-        hex if hex.starts_with('#') && hex.len() == 7 => u32::from_str_radix(&hex[1..], 16).ok(),
-        _ => None,
-    }
+    compute_style(parent_style, inline_style.as_ref())
 }
 
 struct Parser<'a> {
@@ -318,6 +299,7 @@ fn styled_text_to_string(pieces: &[StyledText]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::DEFAULT_COLOR;
 
     #[test]
     fn parses_nested_elements() {
